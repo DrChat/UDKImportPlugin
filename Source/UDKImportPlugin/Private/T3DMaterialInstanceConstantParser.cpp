@@ -1,5 +1,6 @@
-#include "UDKImportPluginPrivatePCH.h"
 #include "T3DMaterialInstanceConstantParser.h"
+
+#include "UDKImportPluginPrivatePCH.h"
 #include "T3DLevelParser.h"
 
 T3DMaterialInstanceConstantParser::T3DMaterialInstanceConstantParser(T3DLevelParser * ParentParser, const FString &Package) : T3DParser(ParentParser->UdkPath, ParentParser->TmpPath)
@@ -34,7 +35,7 @@ UMaterialInstanceConstant*  T3DMaterialInstanceConstantParser::ImportMaterialIns
 
 	FString BasePackageName = FString::Printf(TEXT("/Game/UDK/%s/MaterialInstances"), *Package);
 	FAssetToolsModule& AssetToolsModule = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools");
-	UMaterialInstanceConstantFactoryNew* MaterialFactory = ConstructObject<UMaterialInstanceConstantFactoryNew>(UMaterialInstanceConstantFactoryNew::StaticClass());
+	UMaterialInstanceConstantFactoryNew* MaterialFactory = NewObject<UMaterialInstanceConstantFactoryNew>(UMaterialInstanceConstantFactoryNew::StaticClass());
 	MaterialInstanceConstant = (UMaterialInstanceConstant*)AssetToolsModule.Get().CreateAsset(Name, BasePackageName, UMaterialInstanceConstant::StaticClass(), MaterialFactory);
 	if (MaterialInstanceConstant == NULL)
 	{
@@ -55,10 +56,12 @@ UMaterialInstanceConstant*  T3DMaterialInstanceConstantParser::ImportMaterialIns
 				MaterialInstanceConstant->TextureParameterValues.SetNum(ParameterIndex + 1);
 
 			FTextureParameterValue &Parameter = MaterialInstanceConstant->TextureParameterValues[ParameterIndex];
+			Parameter.ExpressionGUID = FGuid::NewGuid();
+
 			if (GetOneValueAfter(TEXT("ParameterValue="), Value))
 			{
 				FRequirement Requirement;
-				if (ParseRessourceUrl(Value, Requirement))
+				if (ParseResourceUrl(Value, Requirement))
 				{
 					LevelParser->AddRequirement(Requirement, UObjectDelegate::CreateRaw(LevelParser, &T3DLevelParser::SetTextureParameterValue, MaterialInstanceConstant, ParameterIndex));
 				}
@@ -68,7 +71,7 @@ UMaterialInstanceConstant*  T3DMaterialInstanceConstantParser::ImportMaterialIns
 				}
 			}
 			if (GetOneValueAfter(TEXT("ParameterName="), Value))
-				Parameter.ParameterName = *Value;
+				Parameter.ParameterInfo.Name = *Value;
 				
 		}
 		else if (IsParameter(TEXT("ScalarParameterValues"), ParameterIndex, Value))
@@ -77,10 +80,12 @@ UMaterialInstanceConstant*  T3DMaterialInstanceConstantParser::ImportMaterialIns
 				MaterialInstanceConstant->ScalarParameterValues.SetNum(ParameterIndex + 1);
 
 			FScalarParameterValue &Parameter = MaterialInstanceConstant->ScalarParameterValues[ParameterIndex];
+			Parameter.ExpressionGUID = FGuid::NewGuid();
+
 			if (GetOneValueAfter(TEXT("ParameterValue="), Value))
-				Parameter.ParameterValue = FCString::Atoi(*Value);
+				Parameter.ParameterValue = FCString::Atof(*Value);
 			if (GetOneValueAfter(TEXT("ParameterName="), Value))
-				Parameter.ParameterName = *Value;
+				Parameter.ParameterInfo.Name = *Value;
 		}
 		else if (IsParameter(TEXT("VectorParameterValues"), ParameterIndex, Value))
 		{
@@ -88,15 +93,17 @@ UMaterialInstanceConstant*  T3DMaterialInstanceConstantParser::ImportMaterialIns
 				MaterialInstanceConstant->VectorParameterValues.SetNum(ParameterIndex + 1);
 
 			FVectorParameterValue &Parameter = MaterialInstanceConstant->VectorParameterValues[ParameterIndex];
+			Parameter.ExpressionGUID = FGuid::NewGuid();
+
 			if (GetOneValueAfter(TEXT("ParameterValue="), Value))
 				Parameter.ParameterValue.InitFromString(Value);
 			if (GetOneValueAfter(TEXT("ParameterName="), Value))
-				Parameter.ParameterName = *Value;
+				Parameter.ParameterInfo.Name = *Value;
 		}
 		else if (GetProperty(TEXT("Parent="), Value))
 		{
 			FRequirement Requirement;
-			if (ParseRessourceUrl(Value, Requirement))
+			if (ParseResourceUrl(Value, Requirement))
 			{
 				LevelParser->AddRequirement(Requirement, UObjectDelegate::CreateRaw(LevelParser, &T3DLevelParser::SetParent, MaterialInstanceConstant));
 			}
@@ -110,29 +117,3 @@ UMaterialInstanceConstant*  T3DMaterialInstanceConstantParser::ImportMaterialIns
 	return MaterialInstanceConstant;
 }
 
-bool T3DMaterialInstanceConstantParser::IsParameter(const FString &Key, int32 &index, FString &Value)
-{
-	const TCHAR* Stream = *Line;
-
-	if (FParse::Command(&Stream, *Key) && *Stream == TCHAR('('))
-	{
-		++Stream;
-		index = FCString::Atoi(Stream);
-		while (FChar::IsAlnum(*Stream))
-		{
-			++Stream;
-		}
-		if (*Stream == TCHAR(')'))
-		{
-			++Stream;
-			if (*Stream == TCHAR('='))
-			{
-				++Stream;
-				Value = Stream;
-				return true;
-			}
-		}
-	}
-
-	return false;
-}

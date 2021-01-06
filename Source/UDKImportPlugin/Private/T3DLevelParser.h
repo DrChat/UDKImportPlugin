@@ -4,6 +4,7 @@
 
 class T3DMaterialParser;
 class T3DMaterialInstanceConstantParser;
+class ULandscapeComponent;
 
 class T3DLevelParser : public T3DParser
 {
@@ -36,7 +37,7 @@ private:
 	void ExportPackageToRequirements(const FString &Package, EExportType::Type Type);
 
 	/// Ressources requirements
-	void ResolveRequirements();
+	void ResolveRequirements(FScopedSlowTask& Task);
 	void ExportStaticMeshRequirements();
 	void ExportStaticMeshRequirements(const FString &StaticMeshesParams);
 	void ExportMaterialInstanceConstantAssets();
@@ -50,17 +51,22 @@ private:
 	template<class T>
 	T * SpawnActor();
 
+	UWorld* GetWorld();
+
 	/// Actor Importation
 	void ImportLevel();
 	void ImportBrush();
 	void ImportPolyList(UPolys * Polys);
 	void ImportStaticMeshActor();
+	void ImportLandscape();
 	void ImportPointLight();
 	void ImportSpotLight();
+	void ImportDynamic(const FString& ClassName, UObject* Parent);
 	USoundCue * ImportSoundCue();
 
 	/// Available ressource actions
 	void SetStaticMesh(UObject * Object, UStaticMeshComponent * StaticMeshComponent);
+	void SetHeightmapTexture(UObject* Object, ULandscapeComponent* Component);
 	void SetPolygonTexture(UObject * Object, UPolys * Polys, int32 index);
 	void SetSoundCueFirstNode(UObject * Object, USoundCue * SoundCue);
 	void SetStaticMeshMaterial(UObject * Material, FString StaticMeshUrl, int32 MaterialIdx);

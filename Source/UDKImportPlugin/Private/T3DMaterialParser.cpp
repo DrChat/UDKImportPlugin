@@ -1,6 +1,13 @@
-#include "UDKImportPluginPrivatePCH.h"
 #include "T3DMaterialParser.h"
+
+#include "UDKImportPluginPrivatePCH.h"
 #include "T3DLevelParser.h"
+
+#include "Materials/MaterialExpressionCameraVectorWS.h"
+#include "Materials/MaterialExpressionClamp.h"
+#include "Materials/MaterialExpressionObjectPositionWS.h"
+#include "Materials/MaterialExpressionReflectionVectorWS.h"
+#include "Materials/MaterialExpressionVertexNormalWS.h"
 #include "Materials/MaterialFunction.h"
 
 T3DMaterialParser::T3DMaterialParser(T3DLevelParser * ParentParser, const FString &Package) : T3DParser(ParentParser->UdkPath, ParentParser->TmpPath)
@@ -23,43 +30,65 @@ UMaterial* T3DMaterialParser::ImportMaterialT3DFile(const FString &FileName)
 	return NULL;
 }
 
+static UMaterialExpression* NewMaterialExpression(UObject* Parent, UClass* Class)
+{
+	check(Class->IsChildOf(UMaterialExpression::StaticClass()));
+
+	UMaterialExpression* Expression = NewObject<UMaterialExpression>(Parent, Class);
+	Expression->MaterialExpressionGuid = FGuid::NewGuid();
+
+	return Expression;
+}
+
+template<typename T>
+T* NewMaterialExpression(UObject* Parent)
+{
+	return Cast<T>(NewMaterialExpression(Parent, T::StaticClass()));
+}
+
+// Map of classes simply renamed from UDK -> UE4.
+static const TMap<FString, FString> MaterialExpressionTranslation = {
+	{"MaterialExpressionFlipBookSample", "MaterialExpressionTextureSample"},
+	{"MaterialExpressionConstantClamp", "MaterialExpressionClamp"},
+	{"MaterialExpressionCameraVector", "MaterialExpressionCameraVectorWS"},
+	{"MaterialExpressionReflectionVector", "MaterialExpressionReflectionVectorWS"},
+	{"MaterialExpressionWorldNormal", "MaterialExpressionVertexNormalWS"},
+	{"MaterialExpressionObjectWorldPosition", "MaterialExpressionObjectPositionWS"},
+};
+
 UMaterial*  T3DMaterialParser::ImportMaterial()
 {
-	FString ClassName, Name, Value;
+	FString ClassName, MaterialName, Name, Value;
 	UClass * Class;
 
 	ensure(NextLine());
 	ensure(IsBeginObject(ClassName));
 	ensure(ClassName == TEXT("Material"));
-	ensure(GetOneValueAfter(TEXT(" Name="), Name));
+	ensure(GetOneValueAfter(TEXT(" Name="), MaterialName));
 
 	FString BasePackageName = FString::Printf(TEXT("/Game/UDK/%s/Materials"), *Package);
 	FAssetToolsModule& AssetToolsModule = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools");
-	UMaterialFactoryNew* MaterialFactory = ConstructObject<UMaterialFactoryNew>(UMaterialFactoryNew::StaticClass());
-	Material = (UMaterial*)AssetToolsModule.Get().CreateAsset(Name, BasePackageName, UMaterial::StaticClass(), MaterialFactory);
+	UMaterialFactoryNew* MaterialFactory = NewObject<UMaterialFactoryNew>(UMaterialFactoryNew::StaticClass());
+	Material = (UMaterial*)AssetToolsModule.Get().CreateAsset(MaterialName, BasePackageName, UMaterial::StaticClass(), MaterialFactory);
 	if (Material == NULL)
 	{
 		return NULL;
 	}
 
 	Material->Modify();
-
 	while (NextLine() && !IsEndObject())
 	{
 		if (IsBeginObject(ClassName))
 		{
-			if (ClassName == TEXT("MaterialExpressionFlipBookSample"))
-			{
-				Class = UMaterialExpressionTextureSample::StaticClass();
-			}
-			else
-			{
-				Class = (UClass*)StaticFindObject(UClass::StaticClass(), ANY_PACKAGE, *ClassName, true);
-			}
+			const FString* TranslatedClassName = MaterialExpressionTranslation.Find(ClassName);
+			if (TranslatedClassName)
+				ClassName = *TranslatedClassName;
 
+			Class = (UClass*)StaticFindObject(UClass::StaticClass(), ANY_PACKAGE, *ClassName, true);
 			if (Class)
 			{
 				ensure(GetOneValueAfter(TEXT(" Name="), Name));
+
 				FRequirement TextureRequirement;
 				UMaterialExpression* MaterialExpression = ImportMaterialExpression(Class, TextureRequirement);
 				UMaterialExpressionComment * MaterialExpressionComment = Cast<UMaterialExpressionComment>(MaterialExpression);
@@ -82,6 +111,7 @@ UMaterial*  T3DMaterialParser::ImportMaterial()
 			}
 			else
 			{
+				UE_LOG(UDKImportPluginLog, Error, TEXT("Material %s: Unknown material class: %s"), *MaterialName, *ClassName);
 				JumpToEnd();
 			}
 		}
@@ -113,13 +143,17 @@ UMaterial*  T3DMaterialParser::ImportMaterial()
 		{
 			ImportExpression(&Material->OpacityMask);
 		}
+		else if (GetProperty(TEXT("PreviewMesh="), Value))
+		{
+			// TODO: Add requirement.
+		}
 		else if (IsProperty(Name, Value))
 		{
-			UProperty* Property = FindField<UProperty>(UMaterial::StaticClass(), *Name);
+			FProperty* Property = FindFProperty<FProperty>(UMaterial::StaticClass(), *Name);
 			if (Property)
-			{
 				Property->ImportText(*Value, Property->ContainerPtrToValuePtr<uint8>(Material), 0, Material);
-			}
+			else
+				UE_LOG(UDKImportPluginLog, Error, TEXT("Material %s: Unknown property %s"), *MaterialName, *Name);
 		}
 	}
 
@@ -132,21 +166,33 @@ UMaterialExpression* T3DMaterialParser::ImportMaterialExpression(UClass * Class,
 {
 	if (!Class->IsChildOf(UMaterialExpression::StaticClass()))
 		return NULL;
-	UMaterialExpression* MaterialExpression = ConstructObject<UMaterialExpression>(Class, Material);
+
+	UMaterialExpression* MaterialExpression = NewMaterialExpression(Material, Class);
+	MaterialExpression->Material = Material;
 
 	FString Value, Name, PropertyName, Type, PackageName;
 	while (NextLine() && IgnoreSubs() && !IsEndObject())
 	{
 		if (GetProperty(TEXT("Texture="), Value))
 		{
-			if (ParseRessourceUrl(Value, TextureRequirement))
+			auto MaterialExpressionTexture = Cast<UMaterialExpressionTextureBase>(MaterialExpression);
+
+			if (MaterialExpressionTexture)
 			{
-				LevelParser->AddRequirement(TextureRequirement, UObjectDelegate::CreateRaw(LevelParser, &T3DLevelParser::SetTexture, (UMaterialExpressionTextureBase*)MaterialExpression));
+				if (ParseResourceUrl(Value, TextureRequirement))
+				{
+					LevelParser->AddRequirement(TextureRequirement, UObjectDelegate::CreateRaw(LevelParser, &T3DLevelParser::SetTexture, (UMaterialExpressionTextureBase*)MaterialExpression));
+				}
+				else
+				{
+					UE_LOG(UDKImportPluginLog, Warning, TEXT("Unable to parse resource url : %s"), *Value);
+				}
 			}
-			else
-			{
-				UE_LOG(UDKImportPluginLog, Warning, TEXT("Unable to parse ressource url : %s"), *Value);
-			}
+		}
+		else if (GetProperty(TEXT("Name="), Value))
+		{
+			// Silently ignore. Expressions are not named nowadays (it seems).
+			continue;
 		}
 		else if (IsProperty(PropertyName, Value) 
 			&& PropertyName != TEXT("Material")
@@ -178,8 +224,8 @@ UMaterialExpression* T3DMaterialParser::ImportMaterialExpression(UClass * Class,
 					((UMaterialExpressionConstant3Vector*)MaterialExpression)->Constant.R = FCString::Atof(*Value);
 			}
 
-			UProperty* Property = FindField<UProperty>(Class, *PropertyName);
-			UStructProperty * StructProperty = Cast<UStructProperty>(Property);
+			FProperty* Property = FindFProperty<FProperty>(Class, *PropertyName);
+			FStructProperty * StructProperty = CastField<FStructProperty>(Property);
 			if (StructProperty && StructProperty->Struct->GetName() == TEXT("ExpressionInput"))
 			{
 				FExpressionInput * ExpressionInput = Property->ContainerPtrToValuePtr<FExpressionInput>(MaterialExpression);
@@ -189,19 +235,28 @@ UMaterialExpression* T3DMaterialParser::ImportMaterialExpression(UClass * Class,
 			{
 				Property->ImportText(*Value, Property->ContainerPtrToValuePtr<uint8>(MaterialExpression), 0, MaterialExpression);
 			}
+			else
+			{
+				UE_LOG(UDKImportPluginLog, Warning, TEXT("Material %s: %s does not have property %s (= %s)"), *Material->GetName(), *Class->GetName(), *PropertyName, *Value);
+			}
+
+			/*
+			FPropertyChangedEvent PropertyChanged(Property);
+			MaterialExpression->Modify();
+			MaterialExpression->PostEditChangeProperty(PropertyChanged);
+			*/
 		}
 	}
-	MaterialExpression->Material = Material;
-	MaterialExpression->MaterialExpressionEditorX = -MaterialExpression->MaterialExpressionEditorX;
 
+	MaterialExpression->MaterialExpressionEditorX = -MaterialExpression->MaterialExpressionEditorX;
 	return MaterialExpression;
 }
 
 void T3DMaterialParser::ImportMaterialExpressionFlipBookSample(UMaterialExpressionTextureSample * Expression, FRequirement &TextureRequirement)
 {
-	UMaterialExpressionMaterialFunctionCall * MEFunction = ConstructObject<UMaterialExpressionMaterialFunctionCall>(UMaterialExpressionMaterialFunctionCall::StaticClass(), Material);
-	UMaterialExpressionConstant * MECRows = ConstructObject<UMaterialExpressionConstant>(UMaterialExpressionConstant::StaticClass(), Material);
-	UMaterialExpressionConstant * MECCols = ConstructObject<UMaterialExpressionConstant>(UMaterialExpressionConstant::StaticClass(), Material);
+	UMaterialExpressionMaterialFunctionCall * MEFunction = NewMaterialExpression<UMaterialExpressionMaterialFunctionCall>(Material);
+	UMaterialExpressionConstant * MECRows = NewMaterialExpression<UMaterialExpressionConstant>(Material);
+	UMaterialExpressionConstant * MECCols = NewMaterialExpression<UMaterialExpressionConstant>(Material);
 	MEFunction->MaterialExpressionEditorY = Expression->MaterialExpressionEditorY;
 	MECRows->MaterialExpressionEditorY = MEFunction->MaterialExpressionEditorY;
 	MECCols->MaterialExpressionEditorY = MECRows->MaterialExpressionEditorY + 64;
@@ -213,7 +268,7 @@ void T3DMaterialParser::ImportMaterialExpressionFlipBookSample(UMaterialExpressi
 	MECRows->bCollapsed = true;
 	MECCols->bCollapsed = true;
 
-	MEFunction->SetMaterialFunction(NULL, NULL, LoadObject<UMaterialFunction>(NULL, TEXT("/Engine/Functions/Engine_MaterialFunctions02/Texturing/FlipBook.FlipBook")));
+	MEFunction->SetMaterialFunction(LoadObject<UMaterialFunction>(NULL, TEXT("/Engine/Functions/Engine_MaterialFunctions02/Texturing/FlipBook.FlipBook")));
 
 	MEFunction->FunctionInputs[1].Input.Expression = MECRows;
 	MEFunction->FunctionInputs[2].Input.Expression = MECCols;

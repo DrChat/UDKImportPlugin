@@ -45,6 +45,8 @@ public:
 	void Construct(const FArguments& Args);
 
 protected:
+	FReply OnBrowse(TSharedPtr<SEditableTextBox>* Dest);
+
 	/** Run the import tool */
 	FReply OnRun();
 

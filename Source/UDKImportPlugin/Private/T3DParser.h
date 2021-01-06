@@ -1,5 +1,7 @@
 #pragma once
 
+#include "CoreMinimal.h"
+
 #define LOCTEXT_NAMESPACE "UDKImportPlugin"
 
 DECLARE_LOG_CATEGORY_EXTERN(UDKImportPluginLog, Log, All);
@@ -11,7 +13,19 @@ public:
 	struct FRequirement
 	{
 		FString Type, Package, Name, OriginalUrl, Url;
+
+		FORCEINLINE friend uint32 GetTypeHash(const FRequirement& req)
+		{
+			return GetTypeHash(req.Url);
+		}
 	};
+
+	struct FRequirementFixups
+	{
+		TArray<UObjectDelegate> Actions; // Fixup actions
+		UObject* ResolvedObject = nullptr; // Object resolved from this requirement
+	};
+
 protected:
 	static float UnrRotToDeg;
 	static float IntensityMultiplier;
@@ -25,16 +39,18 @@ protected:
 	int32 RunUDK(const FString &CommandLine);
 	int32 RunUDK(const FString &CommandLine, FString &output);
 
-	/// Ressources requirements
-	TMap<FRequirement, TArray<UObjectDelegate> > Requirements;
-	TMap<FRequirement, UObject*> FixedRequirements;
+	/// Resources requirements
+	TArray<TPair<FRequirement, FRequirementFixups>> Requirements;
+
+	bool FindRequirement(const FRequirement &Requirement, UObject * &Object);
+	TPair<FRequirement, FRequirementFixups>* FindRequirement(const FRequirement& Requirement);
+
 	bool ConvertOBJToFBX(const FString &ObjFileName, const FString &FBXFilename);
 	void AddRequirement(const FString &UDKRequiredObjectName, UObjectDelegate Action);
-	void FixRequirement(const FString &UDKRequiredObjectName, UObject * Object);
+	void FixRequirement(const FString& UDKRequiredObjectName, UObject* Object);
 	bool FindRequirement(const FString &UDKRequiredObjectName, UObject * &Object);
 	void AddRequirement(const FRequirement &Requirement, UObjectDelegate Action);
-	void FixRequirement(const FRequirement &Requirement, UObject * Object);
-	bool FindRequirement(const FRequirement &Requirement, UObject * &Object);
+	void FixRequirement(TPair<FRequirement, FRequirementFixups>& Pair, UObject* Object);
 	void PrintMissingRequirements();
 
 	/// Line parsing
@@ -51,6 +67,7 @@ protected:
 	bool IsBeginObject(FString &Class);
 	bool IsEndObject();
 	bool IsProperty(FString &PropertyName, FString &Value);
+	bool IsParameter(const FString& Key, int32& index, FString& Value);
 	bool IsActorLocation(AActor * Actor);
 	bool IsActorRotation(AActor * Actor);
 	bool IsActorScale(AActor * Actor);
@@ -61,25 +78,20 @@ protected:
 	bool GetProperty(const FString &Key, FString &Value);
 	bool ParseUDKRotation(const FString &InSourceString, FRotator &Rotator);
 	bool ParseFVector(const TCHAR* Stream, FVector& Value);
-	void ParseRessourceUrl(const FString &Url, FString &Package, FString &Name);
-	bool ParseRessourceUrl(const FString &Url, FString &Type, FString &Package, FString &Name);
-	bool ParseRessourceUrl(const FString &Url, FRequirement &Requirement);
+	void ParseResourceUrl(const FString &Url, FString &Package, FString &Name);
+	bool ParseResourceUrl(const FString &Url, FString &Type, FString &Package, FString &Name);
+	bool ParseResourceUrl(const FString &Url, FRequirement &Requirement);
 };
-
-FORCEINLINE uint32 GetTypeHash(const T3DParser::FRequirement& R)
-{
-	return FCrc::Strihash_DEPRECATED(*(R.Url));
-}
 
 FORCEINLINE bool operator==(const T3DParser::FRequirement& A, const T3DParser::FRequirement& B)
 {
 	return A.Url == B.Url;
 }
 
-FORCEINLINE bool T3DParser::ParseRessourceUrl(const FString &Url, FRequirement &Requirement)
+FORCEINLINE bool T3DParser::ParseResourceUrl(const FString &Url, FRequirement &Requirement)
 {
 	Requirement.OriginalUrl = Url;
-	if (ParseRessourceUrl(Url, Requirement.Type, Requirement.Package, Requirement.Name))
+	if (ParseResourceUrl(Url, Requirement.Type, Requirement.Package, Requirement.Name))
 	{
 		Requirement.Url = FString::Printf(TEXT("%s'%s.%s'"), *Requirement.Type, *Requirement.Package, *Requirement.Name);
 		return true;

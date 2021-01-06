@@ -1,6 +1,8 @@
-#include "UDKImportPluginPrivatePCH.h"
 #include "T3DParser.h"
-#include "Editor/UnrealEd/Public/Layers/ILayers.h"
+
+#include "Layers/LayersSubsystem.h"
+
+#include "UDKImportPluginPrivatePCH.h"
 
 DEFINE_LOG_CATEGORY(UDKImportPluginLog);
 
@@ -22,7 +24,7 @@ void T3DParser::ResetParser(const FString &Content)
 {
 	LineIndex = 0;
 	ParserLevel = 0;
-	Content.ParseIntoArray(&Lines, TEXT("\n"), true);
+	Content.ParseIntoArray(Lines, TEXT("\n"), true);
 }
 
 bool T3DParser::NextLine()
@@ -161,7 +163,7 @@ bool T3DParser::GetOneValueAfter(const FString &Key, FString &Value, int32 maxin
 void T3DParser::AddRequirement(const FString &UDKRequiredObjectName, UObjectDelegate Action)
 {
 	FRequirement Requirement;
-	if (!ParseRessourceUrl(UDKRequiredObjectName, Requirement))
+	if (!ParseResourceUrl(UDKRequiredObjectName, Requirement))
 	{
 		UE_LOG(UDKImportPluginLog, Warning, TEXT("Unable to parse ressource url : %s"), *UDKRequiredObjectName);
 		return;
@@ -171,60 +173,84 @@ void T3DParser::AddRequirement(const FString &UDKRequiredObjectName, UObjectDele
 
 void T3DParser::AddRequirement(const FRequirement &Requirement, UObjectDelegate Action)
 {
-	UObject ** pObject = FixedRequirements.Find(Requirement);
-	if (pObject != NULL)
+	auto* ExistingPair = FindRequirement(Requirement);
+	if (ExistingPair && ExistingPair->Value.ResolvedObject)
 	{
-		Action.ExecuteIfBound(*pObject);
+		Action.Execute(ExistingPair->Value.ResolvedObject);
 	}
 	else
 	{
-		TArray<UObjectDelegate> * pActions = Requirements.Find(Requirement);
-		if (pActions != NULL)
+		if (ExistingPair)
 		{
-			pActions->Add(Action);
+			// Append action to existing requirement actions.
+			ExistingPair->Value.Actions.Add(Action);
 		}
 		else
 		{
-			TArray<UObjectDelegate> Actions;
-			Actions.Add(Action);
-			Requirements.Add(Requirement, Actions);
+			FRequirementFixups Fixups;
+			Fixups.Actions.Add(Action);
+			
+			Requirements.Emplace(Requirement, Fixups);
 		}
 	}
 }
 
-void T3DParser::FixRequirement(const FString &UDKRequiredObjectName, UObject * Object)
+void T3DParser::FixRequirement(const FString& UDKRequiredObjectName, UObject* Object)
 {
 	FRequirement Requirement;
-	if (!ParseRessourceUrl(UDKRequiredObjectName, Requirement))
+	if (!ParseResourceUrl(UDKRequiredObjectName, Requirement))
 	{
 		UE_LOG(UDKImportPluginLog, Warning, TEXT("Unable to parse ressource url : %s"), *UDKRequiredObjectName);
 		return;
 	}
-	FixRequirement(Requirement, Object);
+
+	auto* Pair = FindRequirement(Requirement);
+	if (Pair)
+	{
+		FixRequirement(*Pair, Object);
+	}
+	else
+	{
+		// Add the requirement to our list as an already-fixed requirement.
+		FRequirementFixups Fixups;
+		Fixups.ResolvedObject = Object;
+
+		Requirements.Emplace(Requirement, Fixups);
+	}
 }
 
-void T3DParser::FixRequirement(const FRequirement &Requirement, UObject * Object)
+void T3DParser::FixRequirement(TPair<FRequirement, FRequirementFixups>& Pair, UObject* Object)
 {
 	if (Object == NULL)
 		return;
 
-	FixedRequirements.Add(FRequirement(Requirement), Object);
-
-	TArray<UObjectDelegate> * pActions = Requirements.Find(Requirement);
-	if (pActions != NULL)
+	if (Pair.Value.ResolvedObject)
 	{
-		for (auto IterActions = pActions->CreateConstIterator(); IterActions; ++IterActions)
-		{
-			IterActions->ExecuteIfBound(Object);
-		}
-		Requirements.Remove(Requirement);
+		UE_LOG(UDKImportPluginLog, Warning, TEXT("Fixing up already resolved requirement? : %s"), *Pair.Key.Name);
+		return;
 	}
+
+	for (auto IterActions = Pair.Value.Actions.CreateConstIterator(); IterActions; ++IterActions)
+		IterActions->ExecuteIfBound(Object);
+
+	Pair.Value.ResolvedObject = Object;
+}
+
+TPair<T3DParser::FRequirement, T3DParser::FRequirementFixups>* T3DParser::FindRequirement(const FRequirement& Requirement)
+{
+	for (auto& Pair : Requirements)
+	{
+		if (Pair.Key == Requirement)
+			return &Pair;
+	}
+
+	return nullptr;
 }
 
 bool T3DParser::FindRequirement(const FString &UDKRequiredObjectName, UObject * &Object)
 {
 	FRequirement Requirement;
-	if (!ParseRessourceUrl(UDKRequiredObjectName, Requirement))
+	if (!ParseResourceUrl(UDKRequiredObjectName, Requirement))
 	{
 		UE_LOG(UDKImportPluginLog, Warning, TEXT("Unable to parse ressource url : %s"), *UDKRequiredObjectName);
 		return false;
@@ -234,22 +260,23 @@ bool T3DParser::FindRequirement(const FString &UDKRequiredObjectName, UObject * 
 
 bool T3DParser::FindRequirement(const FRequirement &Requirement, UObject * &Object)
 {
-	UObject ** pObject = FixedRequirements.Find(Requirement);
-	if (pObject != NULL)
-	{
-		Object = *pObject;
-		return true;
-	}
+	auto* Pair = FindRequirement(Requirement);
+	if (!Pair)
+		return false;
 
-	return false;
+	Object = Pair->Value.ResolvedObject;
+	return Pair->Value.ResolvedObject != nullptr;
 }
 
 void T3DParser::PrintMissingRequirements()
 {
 	for (auto Iter = Requirements.CreateConstIterator(); Iter; ++Iter)
 	{
-		const FRequirement &Requirement = Iter.Key();
-		UE_LOG(UDKImportPluginLog, Warning, TEXT("Missing requirements : %s"), *Requirement.Url);
+		const FRequirement &Requirement = (*Iter).Key;
+		const auto& Fixups = (*Iter).Value;
+
+		if (!Fixups.ResolvedObject)
+			UE_LOG(UDKImportPluginLog, Error, TEXT("Missing requirements : %s"), *Requirement.Url);
 	}
 }
 
@@ -300,8 +327,34 @@ bool T3DParser::IsProperty(FString &PropertyName, FString &Value)
 	if (Line.FindChar('=', Index) && Index > 0)
 	{
 		PropertyName = Line.Mid(0, Index);
-		Value = Line.Mid(Index + 1);
-		return true;
+		return GetOneValueAfter(PropertyName + TEXT("="), Value);
+	}
+
+	return false;
+}
+
+bool T3DParser::IsParameter(const FString& Key, int32& index, FString& Value)
+{
+	const TCHAR* Stream = *Line;
+
+	if (FParse::Command(&Stream, *Key) && *Stream == TCHAR('('))
+	{
+		++Stream;
+		index = FCString::Atoi(Stream);
+		while (FChar::IsAlnum(*Stream))
+		{
+			++Stream;
+		}
+		if (*Stream == TCHAR(')'))
+		{
+			++Stream;
+			if (*Stream == TCHAR('='))
+			{
+				++Stream;
+				Value = Stream;
+				return true;
+			}
+		}
 	}
 
 	return false;
@@ -360,7 +413,7 @@ bool T3DParser::IsActorProperty(AActor * Actor)
 	FString Value;
 	if (GetProperty(TEXT("Layer="), Value))
 	{
-		GEditor->Layers->AddActorToLayer(Actor, FName(*Value));
+		GEditor->GetEditorSubsystem<ULayersSubsystem>()->AddActorToLayer(Actor, FName(*Value));
 		return true;
 	}
 
@@ -376,13 +429,37 @@ int32 T3DParser::RunUDK(const FString &CommandLine)
 int32 T3DParser::RunUDK(const FString &CommandLine, FString &Output)
 {
 	FString StdErr;
-	int32 exitCode;
+	FScopedSlowTask Task(0.f, LOCTEXT("StatusRunUDK", "Running UDK Commandlet..."));
 
-	if (FPlatformProcess::ExecProcess(*(UdkPath / TEXT("Binaries/Win32/UDK.com")), *CommandLine, &exitCode, &Output, &StdErr))
+	void *ReadPipe, *WritePipe;
+	if (!FPlatformProcess::CreatePipe(ReadPipe, WritePipe))
+		return -1;
+
+	auto Process = FPlatformProcess::CreateProc(*(UdkPath / TEXT("Binaries/Win64/UDK.com")), *CommandLine, true, true, true, nullptr, 0, nullptr, WritePipe);
+	while (FPlatformProcess::IsProcRunning(Process))
 	{
-		return exitCode;
+		Task.EnterProgressFrame(0.f);
+		FPlatformProcess::Sleep(0.05f);
+
+		Output += FPlatformProcess::ReadPipe(ReadPipe);
 	}
 
+	int32 Code;
+	if (FPlatformProcess::GetProcReturnCode(Process, &Code))
+	{
+		if (Code != 0)
+		{
+			UE_LOG(UDKImportPluginLog, Error, TEXT("UDK failed with code 0x%08X, output follows:\n%s"), Code, *Output);
+		}
+		else
+		{
+			UE_LOG(UDKImportPluginLog, Verbose, TEXT("UDK output follows:\n%s"), *Output);
+		}
+
+		return Code;
+	}
+
+	UE_LOG(UDKImportPluginLog, Error, TEXT("UDK output follows:\n%s"), *Output);
 	return -1;
 }
 
@@ -401,7 +478,7 @@ bool T3DParser::ConvertOBJToFBX(const FString &ObjFileName, const FString &FBXFi
 	return false;
 }
 
-void T3DParser::ParseRessourceUrl(const FString &Url, FString &Package, FString &Name)
+void T3DParser::ParseResourceUrl(const FString &Url, FString &Package, FString &Name)
 {
 	int32 PackageIndex, NameIndex;
 
@@ -420,7 +497,7 @@ void T3DParser::ParseRessourceUrl(const FString &Url, FString &Package, FString 
 	}
 }
 
-bool T3DParser::ParseRessourceUrl(const FString &Url, FString &Type, FString &Package, FString &Name)
+bool T3DParser::ParseResourceUrl(const FString &Url, FString &Type, FString &Package, FString &Name)
 {
 	int32 Index, PackageIndex, NameIndex;
 

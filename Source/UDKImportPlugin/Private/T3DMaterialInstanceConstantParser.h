@@ -16,5 +16,4 @@ private:
 	// T3D Parsing
 	UMaterialInstanceConstant * ImportMaterialInstanceConstant();
 	UMaterialInstanceConstant * MaterialInstanceConstant;
-	bool IsParameter(const FString &Key, int32 &index, FString &Value);
 };

@@ -1,6 +1,7 @@
 #include "UDKImportPluginPrivatePCH.h"
 #include "SUDKImportScreen.h"
 
+#undef LOCTEXT_NAMESPACE
 #define LOCTEXT_NAMESPACE "UDKImportPlugin"
 
 class FUDKImportPlugin : public IUDKImportPlugin
@@ -34,7 +35,7 @@ void FUDKImportPlugin::StartupModule()
 	{
 		// Add menu option for UDK import
 		MainMenuExtender = MakeShareable(new FExtender);
-		MainMenuExtender->AddMenuExtension("HelpBrowse", EExtensionHook::After, NULL, FMenuExtensionDelegate::CreateRaw(this, &FUDKImportPlugin::AddSummonUDKImportMenuExtension));
+		MainMenuExtender->AddMenuExtension("FileProject", EExtensionHook::After, NULL, FMenuExtensionDelegate::CreateRaw(this, &FUDKImportPlugin::AddSummonUDKImportMenuExtension));
 		FLevelEditorModule& LevelEditorModule = FModuleManager::LoadModuleChecked<FLevelEditorModule>("LevelEditor");
 		LevelEditorModule.GetMenuExtensibilityManager()->AddExtender(MainMenuExtender);
 	}
@@ -53,7 +54,7 @@ void FUDKImportPlugin::AddSummonUDKImportMenuExtension(FMenuBuilder& MenuBuilder
 
 void FUDKImportPlugin::SummonUDKImport()
 {
-	const FText UDKImportWindowTitle = LOCTEXT("UDKImportWindowTitle", "UDK Map importation tool");
+	const FText UDKImportWindowTitle = LOCTEXT("UDKImportWindowTitle", "UDK Map import tool");
 
 	TSharedPtr<SWindow> UDKImportWindow =
 		SNew(SWindow)

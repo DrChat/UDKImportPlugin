@@ -1,7 +1,12 @@
-#include "UDKImportPluginPrivatePCH.h"
 #include "SUDKImportScreen.h"
+
+#include "Developer/DesktopPlatform/Public/IDesktopPlatform.h"
+#include "Developer/DesktopPlatform/Public/DesktopPlatformModule.h"
+
+#include "UDKImportPluginPrivatePCH.h"
 #include "T3DLevelParser.h"
 
+#undef LOCTEXT_NAMESPACE
 #define LOCTEXT_NAMESPACE "UDKImportScreen"
 
 DEFINE_LOG_CATEGORY(LogUDKImportPlugin);
@@ -86,7 +91,7 @@ void SUDKImportScreen::Construct(const FArguments& Args)
 			.VAlign(VAlign_Center)
 			[
 				SNew(STextBlock)
-				.Text(LOCTEXT("ExportType", "Exportation mode"))
+				.Text(LOCTEXT("ExportType", "Export mode"))
 			]
 			+ SVerticalBox::Slot()
 			.FillHeight(1.0f)
@@ -117,9 +122,20 @@ void SUDKImportScreen::Construct(const FArguments& Args)
 			.FillHeight(1.0f)
 			.Padding(2.0f)
 			[
-				SAssignNew(SUDKPath, SEditableTextBox)
-				.Text(FText::FromString(TEXT("C:/UDK/UDK-2014-02")))
-				.ToolTipText(LOCTEXT("UDKPath", "Path to the UDK directory(ex: \"C:/UDK/UDK-2014-02\")"))
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot()
+				[
+					SAssignNew(SUDKPath, SEditableTextBox)
+					.HintText(FText::FromString(TEXT("C:/UDK/UDK-2014-02")))
+					.ToolTipText(LOCTEXT("UDKPath", "Path to the UDK directory(ex: \"C:/UDK/UDK-2014-02\")"))
+				]
+				+ SHorizontalBox::Slot()
+				.AutoWidth()
+				[
+					SNew(SButton)
+					.Text(FText::FromString(TEXT("Browse...")))
+					.OnClicked(this, &SUDKImportScreen::OnBrowse, &SUDKPath)
+				]
 			]
 			+ SVerticalBox::Slot()
 			.FillHeight(1.0f)
@@ -139,16 +155,26 @@ void SUDKImportScreen::Construct(const FArguments& Args)
 			.Padding(2.0f)
 			[
 				SAssignNew(SLevel, SEditableTextBox)
-				.Text(FText::FromString(TEXT("MyPackage.MyRessouce")))
 				.ToolTipText(LOCTEXT("MyPackage.MyRessouce", "Reference to the ressource or package (eg: MyLevel or MyPackage.MyRessource)"))
 			]
 			+ SVerticalBox::Slot()
 			.FillHeight(1.0f)
 			.Padding(2.0f)
 			[
-				SAssignNew(STmpPath, SEditableTextBox)
-				.Text(FText::FromString(TEXT("C:/UDK/TemporaryFolder")))
-				.ToolTipText(LOCTEXT("ExportTmpFolder", "An existing temporary folder to use for the UDK exportation"))
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot()
+				[
+					SAssignNew(STmpPath, SEditableTextBox)
+					.HintText(FText::FromString(TEXT("C:/temp")))
+					.ToolTipText(LOCTEXT("ExportTmpFolder", "An existing temporary folder to use for the UDK export"))
+				]
+				+ SHorizontalBox::Slot()
+				.AutoWidth()
+				[
+					SNew(SButton)
+					.Text(FText::FromString(TEXT("Browse...")))
+					.OnClicked(this, &SUDKImportScreen::OnBrowse, &STmpPath)
+				]
 			]
 			+ SVerticalBox::Slot()
 			.FillHeight(1.0f)
@@ -170,11 +196,44 @@ void SUDKImportScreen::Construct(const FArguments& Args)
 	ExportTypeOptionsSource.Add(MakeShareable(new EUDKImportMode::Type(EUDKImportMode::MaterialInstanceConstant)));
 }
 
+FReply SUDKImportScreen::OnBrowse(TSharedPtr<SEditableTextBox>* Dest)
+{
+	check(Dest != nullptr);
+	check(GEditor);
+
+	if (!(*Dest))
+		return FReply::Handled();
+
+	void* ParentWindow = GEditor->GetActiveViewport()->GetWindow();
+	IDesktopPlatform* DesktopPlatform = FDesktopPlatformModule::Get();
+	if (DesktopPlatform)
+	{
+		FString FolderName;
+		if (DesktopPlatform->OpenDirectoryDialog(ParentWindow, TEXT("Browse"), TEXT(""), FolderName))
+			(*Dest)->SetText(FText::FromString(FolderName));
+	}
+
+	return FReply::Handled();
+}
+
 FReply SUDKImportScreen::OnRun()
 {
 	const FString UdkPath = SUDKPath.Get()->GetText().ToString();
 	const FString TmpPath = STmpPath.Get()->GetText().ToString();
 	const FString Ressource = SLevel.Get()->GetText().ToString();
+
+	// Test to make sure the UDK path is valid.
+	if (!IFileManager::Get().DirectoryExists(*UdkPath))
+	{
+		FMessageDialog::Open(EAppMsgType::Ok, LOCTEXT("ExportUDKPathErr", "UDK directory does not exist!"));
+		return FReply::Unhandled();
+	}
+
+	if (!IFileManager::Get().DirectoryExists(*(UdkPath / TEXT("Binaries") / TEXT("Win64"))))
+	{
+		FMessageDialog::Open(EAppMsgType::Ok, LOCTEXT("ExportUDKPathErr", "UDK directory is not valid!\nA valid path should have the Binaries folder"));
+		return FReply::Unhandled();
+	}
 
 	switch (ExportMode)
 	{
